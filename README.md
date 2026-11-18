@@ -19,7 +19,7 @@
 
 ---
 
-lab01 is a single laptop server in a private home that serves the public site [cyberuser.de](https://cyberuser.de), a collection of browser-only security tools. It follows a **zero inbound exposure** model: visitors are served by Cloudflare, which reaches the server only through a tunnel the server itself opens outwards, and the administrator connects only through an encrypted private network from one approved device.
+lab01 is a single laptop server in a private home that serves the public site [cyberuser.de](https://cyberuser.de). The site currently offers two features: a security situation page listing current CVEs from official sources, rendered at the edge by a Cloudflare Worker, and a browser fingerprinting page that shows visitors what their own browser reveals, computed entirely in the browser. Further features are planned. It follows a **zero inbound exposure** model: visitors are served by Cloudflare, which reaches the server only through a tunnel the server itself opens outwards, and the administrator connects only through an encrypted private network from one approved device.
 
 The public payload is a static site. The engineering is in the architecture, the hardening, the encryption and the day-to-day operation around it, including a full detection pipeline that has already caught live credential theft and one of its own blind spots.
 
@@ -279,7 +279,7 @@ Containers run under **rootless Podman** as a dedicated, shell-less service user
 
 </details>
 
-- **Front end:** no inline scripts or styles, no third-party origins at all, cross-origin isolated (COOP + COEP). All tools run fully in the browser; `connect-src 'none'` guarantees the page cannot send client data anywhere. Lighthouse Performance, Accessibility, Best Practices and SEO all at 100 on mobile and desktop.
+- **Front end:** no inline scripts or styles, no third-party origins at all, cross-origin isolated (COOP + COEP). The fingerprinting page runs entirely in the browser; `connect-src 'none'` guarantees the page cannot send client data anywhere. Lighthouse Performance, Accessibility, Best Practices and SEO all at 100 on mobile and desktop.
 - **Contact form:** handled by a Cloudflare Worker on one exact route. Other methods receive `405` with `Allow: POST`. Only same-origin, URL-encoded POST requests are accepted (`Sec-Fetch-Site` check against CSRF), sizes are capped, honeypot submissions are dropped silently, messages are stored in Workers KV with a 90-day expiry, and the Telegram notification carries no content, so no personal data leaves Cloudflare. A rate limit blocks more than 2 requests in 10 seconds (tested: `405, 405, 429, 429`).
 - **Caching:** browser cache per asset type through an nginx `map` (static CSS and JS `max-age=31536000, immutable`, HTML `max-age=300`), chosen over a `location` block so all security headers still apply to every response.
 
@@ -579,7 +579,7 @@ The home address in the legal notice was replaced with a commercial c/o postal a
 - **Report scope stated:** the daily report now says it counts origin-side traffic only, after a day where it counted 4 attempts while the edge refused several hundred.
 - **`/.well-known/` prefix narrowed** to its two exact files; a control probe makes a reinstated prefix fail the test (34 of 34 passing).
 - **Housekeeping:** standing LVM snapshots removed; recovery rests on the daily encrypted off-host backup.
-- **Application-layer testing:** all in-browser tools write output with `textContent` only (no `innerHTML`, no `eval`); the terminal maps input through a static table via `hasOwnProperty.call`, so input is never a navigation target. The contact Worker was exercised live: honeypot, content-free notification, size caps and non-user-controlled storage keys behave as designed, and there is no read route. **No executable injection found.** Two items are recorded rather than fixed: stored values are unescaped (escape at display time if a reader is ever built), and the `Sec-Fetch-Site` gate stops browser CSRF but not scripted submissions, which are bounded by the edge rate limit.
+- **Application-layer testing:** all client-side scripts write output with `textContent` only (no `innerHTML`, no `eval`); the terminal maps input through a static table via `hasOwnProperty.call`, so input is never a navigation target. The contact Worker was exercised live: honeypot, content-free notification, size caps and non-user-controlled storage keys behave as designed, and there is no read route. **No executable injection found.** Two items are recorded rather than fixed: stored values are unescaped (escape at display time if a reader is ever built), and the `Sec-Fetch-Site` gate stops browser CSRF but not scripted submissions, which are bounded by the edge rate limit.
 
 </details>
 
@@ -641,7 +641,7 @@ Indicators from the credential-pipeline incident, submitted to **abuse.ch Threat
 | Rootless containers without an AppArmor profile | Rootless Podman cannot apply `containers-default`; compensated by zero capabilities, no-new-privileges, seccomp, read-only root and user namespaces |
 | Tailscale via DERP relay instead of a direct path | UPnP and NAT-PMP blocked on purpose: slower, but no automatic port openings |
 | Device approval instead of Tailnet Lock | Mutually exclusive; the account uses a phishing-resistant passkey |
-| Minimum TLS 1.3 at the edge | Very old clients and some scanners cannot connect; acceptable for a security tools site |
+| Minimum TLS 1.3 at the edge | Very old clients and some scanners cannot connect; acceptable for a security-focused site |
 | HSTS without `preload` | Eligible, but preload is no longer recommended, would block future internal subdomains and takes months to undo |
 | Router without WPA3 | Not offered by the firmware; WPA2 with PMF and 20-character random keys |
 | HTML cached at the edge for 2 h | Free plan minimum; browser cache set per asset type, manual purge after deploys |
