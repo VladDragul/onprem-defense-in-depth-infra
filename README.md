@@ -220,6 +220,20 @@ Every place data rests or moves is encrypted, and every key has a defined home a
 - **DNS:** Quad9 over DNS over TLS with DNSSEC validation. MagicDNS is scoped to tailnet names only, so general queries never leave through it.
 - **Home network:** the server sits on the router's guest Wi-Fi, limited to internet access and isolated from the home network. Router firmware current with automatic updates, WPA2 with protected management frames, WPS off, no port forwardings, ISP remote configuration off, botnet detection on.
 
+### Network segmentation
+
+The home network is split into two zones by the router: the main LAN, which holds the admin Mac, and an isolated guest Wi-Fi, which holds only lab01 and has internet access only. Tailscale is the only bridge between the two zones, and its policy allows exactly one flow.
+
+| Path | Allowed | Enforced by |
+| --- | --- | --- |
+| lab01 → admin Mac | No | Guest Wi-Fi isolation; the tailnet policy has no rule in this direction |
+| Admin Mac → lab01 over the LAN | No | Guest Wi-Fi isolation; `sshd` does not listen on the Wi-Fi interface |
+| Admin Mac → lab01 over Tailscale | Only SSH (TCP 22), key-only | The single, intentional administration path |
+| Other home devices → lab01 | No | Guest Wi-Fi isolation |
+| Internet → lab01 or the Mac | No | No port forwarding; UPnP and NAT-PMP blocked |
+
+**What this means for an attacker.** A compromised server cannot pivot to the admin workstation or to any other device on the home network: there is no route and no tailnet rule for it. The opposite direction is deliberately not closed, because the administration path has to exist: an attacker who controlled the Mac and its SSH key could reach the server through it. That path is protected by key-only authentication, device approval in the tailnet, a passkey on the identity provider and an alert on every SSH login.
+
 ## Identity and access
 
 | Control | State |
