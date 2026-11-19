@@ -42,6 +42,7 @@ The public payload is a static site. The engineering is in the architecture, the
 - [Backup and recovery](#backup-and-recovery)
 - [Audit and remediation](#audit-and-remediation)
 - [External validation](#external-validation)
+- [Vulnerability response: NGINX2Root](#vulnerability-response-nginx2root-19-november-2026)
 - [Incident: observed credential pipeline](#incident-observed-credential-pipeline)
 - [Incident: security log blindness](#incident-security-log-blindness)
 - [Operations log](#operations-log)
@@ -441,6 +442,57 @@ On 11 November 2026 the public endpoint was tested with independent scanners. Th
 
 </details>
 
+## Vulnerability response: NGINX2Root, 19 November 2026
+
+> [!NOTE]
+> **Summary.** On 18 November 2026 F5 disclosed five memory-safety vulnerabilities in NGINX, branded NGINX2Root, which allow unauthenticated remote code execution as the worker process, with a public proof of concept for the lead CVE and a demonstrated chain to host root through an unpatched Linux kernel flaw. None of the five was reachable in this configuration, and the second half of the chain was already blocked by a hardening decision taken eight days earlier. The origin was updated the same day regardless.
+
+### The disclosure
+
+F5 released NGINX 1.30.7 (stable) and 1.31.9 (mainline) out of band. The two releases fix ten CVEs in total, of which five form the NGINX2Root set. F5 scores all five CVSS v4.0 9.2 (Critical) and CVSS v3.1 8.1 (High), while the NGINX project's own advisories rate two of them major and three medium. Rapid7 published a working proof of concept for CVE-2026-123007 only. The research chains a compromised NGINX worker with a Linux kernel SCTP flaw that was still unpatched at disclosure, which is where the name comes from.
+
+This origin was running 1.31.8, inside the affected range for all five.
+
+### Exposure analysis
+
+Each CVE requires a specific feature to be enabled. The origin here is an nginx container that serves static files over plain HTTP on a pod-internal port, reached only by cloudflared. It terminates no TLS, speaks no HTTP/2 or HTTP/3, proxies nothing and resolves nothing at request time.
+
+| CVE | Precondition for reachability | Present here | Reachable |
+| --- | --- | --- | --- |
+| CVE-2026-123007 | HTTP/2 enabled on a client-facing listener, static-only servers included | `listen 8080;` with no `http2` directive | No |
+| CVE-2026-123633 | HTTP/2 plus requests forwarded to an upstream | No HTTP/2, no `proxy_pass` or `fastcgi_pass` | No |
+| CVE-2026-121810 | An HTTP/3 (QUIC) listener with an upstream | No QUIC listener, no UDP listener at all | No |
+| CVE-2026-123634 | A `resolver`, a `proxy_pass` containing a variable, and subrequests | No `resolver`, no proxy, no `mirror`, SSI or `auth_request` | No |
+| CVE-2026-113425 | A `mail {}` block with `proxy on` and `auth_http` | No `mail` block, no `stream` block | No |
+
+The HTTP/2 question is the one that matters, because CVE-2026-123007 is reachable on a server that does nothing but serve static files. Visitors do negotiate HTTP/2 and HTTP/3, but they negotiate it with Cloudflare. The tunnel delivers HTTP/1.1 to the origin, so the vulnerable frame-parsing path is never entered by any traffic this server can receive. That protocol downgrade between edge and origin is a property of the zero-inbound architecture rather than a control chosen against this CVE, and it is what makes the most severe of the five structurally unreachable.
+
+### Pre-existing mitigations of the chain
+
+| Layer | Control | Effect on this chain |
+| --- | --- | --- |
+| Kernel modules | SCTP blocked with `install /bin/false`, alongside DCCP, RDS and TIPC, since the audit of 10 November | The kernel flaw used to escalate from worker to root cannot be reached: the module does not load |
+| Kernel | `kernel.randomize_va_space = 2`, full ASLR | F5 names disabled or bypassed ASLR as a condition for code execution. Not a control to rely on, since the researchers demonstrated bypass techniques, but one more layer |
+| Container | Rootless Podman, UID 101, all capabilities dropped, `no-new-privileges`, read-only root filesystem, seccomp filter, user namespace | Code execution as the worker lands in a namespace with zero capabilities and no writable filesystem, with no host port published |
+| Architecture | Origin reachable only through an outbound tunnel | No attacker can address the origin directly; every request arrives through Cloudflare and the edge allowlist |
+
+The SCTP block was applied for attack-surface reduction eight days before this disclosure existed, with no knowledge of it. That is the intended return on generic hardening: it pays out against vulnerabilities that are not yet public.
+
+### Action taken
+
+The update was applied on 19 November despite the exposure analysis, because an unreachable vulnerability becomes reachable the moment a configuration changes, and a published proof of concept shortens the interval in which that mistake would matter.
+
+| Step | Detail |
+| --- | --- |
+| Backup | The Quadlet unit copied to a dated backup in the root-owned archive directory, which stays under file integrity monitoring |
+| Change | `Image=` bumped from `nginx/nginx-unprivileged:1.31.8-alpine` to `1.31.9-alpine`, pulled, `daemon-reload`, unit restarted |
+| Verification | The server banner reports 1.31.9, the container runs the expected image ID and reports healthy, the site answers `200` through the edge, and a cache-miss probe with a unique query string answers `200` from the origin through the tunnel |
+| Cleanup | The superseded image removed and dangling layers pruned |
+| Integrity | The AIDE baseline reviewed, every entry attributed to this change, then accepted and its hash recorded |
+
+> [!TIP]
+> **Lesson recorded.** An exposure analysis decides how urgent a patch is, not whether to apply it. The analysis is what turns a critical advisory into a planned change instead of an emergency, and the configuration it rests on has to be re-checked rather than assumed: the same server becomes vulnerable the day someone adds one directive.
+
 ## Incident: observed credential pipeline
 
 > [!TIP]
@@ -597,6 +649,13 @@ The home address in the legal notice was replaced with a commercial c/o postal a
 
 </details>
 
+<details>
+<summary><b>19 November: NGINX2Root exposure analysis and origin update</b></summary>
+
+F5 disclosed five remote code execution vulnerabilities in NGINX on 18 November, with a public proof of concept for the lead CVE and a demonstrated chain to host root. An exposure analysis against the running configuration found none of the five reachable: the origin enables no HTTP/2, no HTTP/3, no resolver, no upstream proxying and no mail proxy, and the SCTP module used by the privilege-escalation half of the chain had been blocked at the audit of 10 November. The origin was updated from 1.31.8 to 1.31.9 the same day regardless, verified end to end, and the integrity baseline re-accepted. Full analysis in [Vulnerability response: NGINX2Root](#vulnerability-response-nginx2root-19-november-2026).
+
+</details>
+
 ## Threat intelligence
 
 Indicators from the credential-pipeline incident, submitted to **abuse.ch ThreatFox**:
@@ -677,6 +736,8 @@ Indicators from the credential-pipeline incident, submitted to **abuse.ch Threat
 7. **A local tripwire proves a file was taken. Only a tripwire that travels proves it was read, parsed and acted upon,** and it reports from a network the site never sees.
 8. **Negative results need a second source,** whether DNS (authoritative server) or Certificate Transparency (two indexes).
 
+9. **An exposure analysis decides how urgent a patch is, not whether to apply it.** Generic hardening pays out against vulnerabilities that are not yet public: a module blocked for attack-surface reduction cut the privilege-escalation half of a chain disclosed eight days later.
+
 ## What this demonstrates
 
 | Skill | Evidence in this project |
@@ -695,6 +756,6 @@ Indicators from the credential-pipeline incident, submitted to **abuse.ch Threat
 
 <div align="center">
 
-**Author:** Vlad-Răzvan Cozmuța · **Report version:** 2.1 (18 November 2026) · **Next review:** February 2027
+**Author:** VladDragul · **Report version:** 2.2 (19 November 2026) · **Next review:** February 2027
 
 </div>
